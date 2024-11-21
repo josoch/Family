@@ -391,54 +391,101 @@ def toggle_member_status(user_id):
 @app.route('/funding_requests')
 @login_required
 def funding_requests():
-    requests = FundingRequest.query.filter_by(family_id=current_user.family_id).order_by(FundingRequest.date_requested.desc()).all()
+    """View all funding requests for the family."""
+    requests = FundingRequest.query.filter_by(family_id=current_user.family_id)\
+        .order_by(FundingRequest.date_requested.desc()).all()
     return render_template('funding_requests.html', requests=requests)
 
-@app.route('/add_funding_request', methods=['GET', 'POST'])
+@app.route('/funding_requests/add', methods=['GET', 'POST'])
 @login_required
 def add_funding_request():
+    """Add a new funding request."""
     if request.method == 'POST':
-        title = request.form.get('title')
-        description = request.form.get('description')
-        amount = float(request.form.get('amount'))
-        
-        funding_request = FundingRequest(
-            title=title,
-            description=description,
-            amount=amount,
-            family_id=current_user.family_id,
-            requested_by=current_user.id
-        )
-        db.session.add(funding_request)
-        db.session.commit()
-        flash('Funding request submitted successfully')
-        return redirect(url_for('funding_requests'))
-    
+        try:
+            # Get form data
+            title = request.form.get('title')
+            description = request.form.get('description')
+            amount = float(request.form.get('amount'))
+
+            # Validate input
+            if not title or not description or amount <= 0:
+                flash('Please fill in all fields with valid values.', 'error')
+                return redirect(url_for('add_funding_request'))
+
+            # Create new funding request
+            new_request = FundingRequest(
+                title=title,
+                description=description,
+                amount=amount,
+                family_id=current_user.family_id,
+                requested_by=current_user.id,
+                status='pending'
+            )
+            db.session.add(new_request)
+            db.session.commit()
+
+            flash('Funding request submitted successfully!', 'success')
+            return redirect(url_for('funding_requests'))
+
+        except ValueError:
+            flash('Please enter a valid amount.', 'error')
+            return redirect(url_for('add_funding_request'))
+        except Exception as e:
+            db.session.rollback()
+            flash('An error occurred while submitting your request. Please try again.', 'error')
+            return redirect(url_for('add_funding_request'))
+
     return render_template('add_funding_request.html')
 
-@app.route('/approve_funding_request/<int:id>', methods=['POST'])
+@app.route('/funding_requests/<int:id>/approve', methods=['POST'])
 @login_required
+@father_required
 def approve_funding_request(id):
-    if current_user.role != 'father':
-        flash('Only the father can approve funding requests')
-        return redirect(url_for('funding_requests'))
-        
-    funding_request = FundingRequest.query.get_or_404(id)
-    
-    if funding_request.family_id != current_user.family_id:
-        flash('You do not have permission to approve this request')
-        return redirect(url_for('funding_requests'))
-    
-    status = request.form.get('status')  # 'approved' or 'rejected'
-    comments = request.form.get('comments')
-    
-    funding_request.status = status
-    funding_request.approved_by = current_user.id
-    funding_request.approved_date = datetime.utcnow()
-    funding_request.comments = comments
-    
-    db.session.commit()
-    flash(f'Funding request {status}')
+    """Approve or reject a funding request (father only)."""
+    try:
+        funding_request = FundingRequest.query.filter_by(
+            id=id,
+            family_id=current_user.family_id
+        ).first_or_404()
+
+        # Only pending requests can be approved/rejected
+        if funding_request.status != 'pending':
+            flash('This request has already been processed.', 'error')
+            return redirect(url_for('funding_requests'))
+
+        # Get form data
+        status = request.form.get('status')
+        comments = request.form.get('comments')
+
+        if status not in ['approved', 'rejected']:
+            flash('Invalid status provided.', 'error')
+            return redirect(url_for('funding_requests'))
+
+        # Update request
+        funding_request.status = status
+        funding_request.approved_by = current_user.id
+        funding_request.approved_date = datetime.utcnow()
+        funding_request.comments = comments
+
+        # If approved, create a transaction
+        if status == 'approved':
+            transaction = Transaction(
+                amount=funding_request.amount,
+                category='Funding Request',
+                description=f'Approved funding request: {funding_request.title}',
+                transaction_type='expense',
+                family_id=current_user.family_id,
+                created_by=current_user.id
+            )
+            db.session.add(transaction)
+
+        db.session.commit()
+        flash(f'Funding request {status} successfully!', 'success')
+
+    except Exception as e:
+        db.session.rollback()
+        flash('An error occurred while processing the request. Please try again.', 'error')
+
     return redirect(url_for('funding_requests'))
 
 if __name__ == '__main__':
