@@ -12,7 +12,7 @@
                 </div>
                 <div class="card-body">
                     <form method="POST">
-                        {{ form.hidden_tag() }}
+                        {{ form.csrf_token }}
                         
                         <div class="form-group mb-3">
                             {{ form.username.label(class="form-label") }}
@@ -42,6 +42,15 @@
                                     <div class="alert alert-danger">{{ error }}</div>
                                 {% endfor %}
                             {% endif %}
+                            <div class="form-text">
+                                Password requirements:
+                                <ul>
+                                    <li>At least 8 characters long</li>
+                                    <li>At least one uppercase letter</li>
+                                    <li>At least one lowercase letter</li>
+                                    <li>At least one number</li>
+                                </ul>
+                            </div>
                         </div>
 
                         <div class="form-group mb-3">
@@ -66,7 +75,7 @@
 
                         <div class="d-grid gap-2">
                             <button type="submit" class="btn btn-primary">Add Member</button>
-                            <a href="{{ url_for('manage_family') }}" class="btn btn-secondary">Cancel</a>
+                            <a href="{{ url_for('manage_family_members') }}" class="btn btn-secondary">Cancel</a>
                         </div>
                     </form>
                 </div>

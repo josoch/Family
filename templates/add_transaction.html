@@ -54,6 +54,16 @@
                             {% endif %}
                         </div>
 
+                        <div class="form-group mb-3">
+                            {{ form.funding_request.label(class="form-label") }}
+                            {{ form.funding_request(class="form-select") }}
+                            {% if form.funding_request.errors %}
+                                {% for error in form.funding_request.errors %}
+                                    <div class="invalid-feedback d-block">{{ error }}</div>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+
                         {% if current_user.role in ['father', 'mother'] %}
                         <div class="form-group mb-3">
                             {{ form.payee.label(class="form-label") }}

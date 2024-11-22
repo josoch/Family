@@ -29,45 +29,38 @@ class Family(db.Model):
     
     # Relationships
     members = db.relationship('User', backref='family', lazy=True)
-    transactions = db.relationship('Transaction', backref='family_ref', lazy=True)
-    funding_requests = db.relationship('FundingRequest', backref='family_ref', lazy=True)
+    transactions = db.relationship('Transaction', backref='family', lazy=True)
+    funding_requests = db.relationship('FundingRequest', backref='family', lazy=True)
 
 class Transaction(db.Model):
     __tablename__ = 'financial_transaction'
     id = db.Column(db.Integer, primary_key=True)
     amount = db.Column(db.Float, nullable=False)
     category = db.Column(db.String(50), nullable=False)
-    description = db.Column(db.Text)
-    transaction_type = db.Column(db.String(20), nullable=False)
-    date = db.Column(db.DateTime, default=datetime.utcnow)
-    family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
+    description = db.Column(db.String(200))
+    transaction_type = db.Column(db.String(20), nullable=False)  # income/expense
     created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     payee_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Relationships without backrefs (since they're defined in User model)
-    creator = db.relationship('User', foreign_keys=[created_by])
-    payee = db.relationship('User', foreign_keys=[payee_id])
+    # Define relationships
+    creator = db.relationship('User', foreign_keys=[created_by], backref='transactions_created')
+    payee = db.relationship('User', foreign_keys=[payee_id], backref='transactions_received')
 
-class User(UserMixin, db.Model):
+class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(128))
-    role = db.Column(db.String(20), nullable=False)  # father, mother, child
-    family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
+    role = db.Column(db.String(20), nullable=False)
     balance = db.Column(db.Float, default=0.0)
     is_active = db.Column(db.Boolean, default=True)
+    family_id = db.Column(db.Integer, db.ForeignKey('family.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Define relationships with backrefs here
-    transactions_created = db.relationship('Transaction', 
-                                         foreign_keys='Transaction.created_by',
-                                         backref=db.backref('creator_ref', lazy=True),
-                                         lazy=True)
-    transactions_received = db.relationship('Transaction', 
-                                          foreign_keys='Transaction.payee_id',
-                                          backref=db.backref('payee_ref', lazy=True),
-                                          lazy=True)
-    requests_created = db.relationship('FundingRequest', 
+    # Relationships for funding requests
+    funding_requests = db.relationship('FundingRequest',
                                      foreign_keys='FundingRequest.requested_by',
                                      backref=db.backref('requester_ref', lazy=True),
                                      lazy=True)
@@ -75,6 +68,9 @@ class User(UserMixin, db.Model):
                                       foreign_keys='FundingRequest.approved_by',
                                       backref=db.backref('approver_ref', lazy=True),
                                       lazy=True)
+    funding_request_balances = db.relationship('FundingRequestBalance',
+                                             backref='user_ref',
+                                             lazy=True)
 
     @property
     def password(self):
@@ -82,6 +78,22 @@ class User(UserMixin, db.Model):
 
     @password.setter
     def password(self, password):
+        # Check password complexity requirements
+        if len(password) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        
+        # Check for at least one uppercase letter
+        if not any(c.isupper() for c in password):
+            raise ValueError('Password must contain at least one uppercase letter')
+            
+        # Check for at least one lowercase letter
+        if not any(c.islower() for c in password):
+            raise ValueError('Password must contain at least one lowercase letter')
+            
+        # Check for at least one number
+        if not any(c.isdigit() for c in password):
+            raise ValueError('Password must contain at least one number')
+            
         self.password_hash = generate_password_hash(password)
 
     def verify_password(self, password):
@@ -98,19 +110,42 @@ class FundingRequest(db.Model):
     title = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text)
     amount = db.Column(db.Float, nullable=False)
-    status = db.Column(db.String(20), default='pending')
+    status = db.Column(db.String(20), default='pending')  # pending, approved, rejected
+    family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
     requested_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     approved_by = db.Column(db.Integer, db.ForeignKey('user.id'))
-    family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
-    comments = db.Column(db.Text)
-    date_requested = db.Column(db.DateTime, server_default=db.text('CURRENT_TIMESTAMP'))
     approved_date = db.Column(db.DateTime)
-    updated_at = db.Column(db.DateTime, server_default=db.text('CURRENT_TIMESTAMP'), 
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
                           onupdate=db.text('CURRENT_TIMESTAMP'))
 
-    # Relationships without backrefs (since they're defined in User model)
-    requester = db.relationship('User', foreign_keys=[requested_by])
-    approver = db.relationship('User', foreign_keys=[approved_by])
+    # Relationships
+    requester = db.relationship('User', foreign_keys=[requested_by], backref='requests_created')
+    approver = db.relationship('User', foreign_keys=[approved_by])  # Remove backref since it's defined in User model
+    request_balances = db.relationship('FundingRequestBalance', backref='request', lazy=True)
+    request_transactions = db.relationship('FundingRequestTransaction', backref='request', lazy=True)
+
+class FundingRequestBalance(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    funding_request_id = db.Column(db.Integer, db.ForeignKey('funding_request.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    allocated_amount = db.Column(db.Float, nullable=False)
+    remaining_balance = db.Column(db.Float, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = db.relationship('User', backref='balance_records')
+
+class FundingRequestTransaction(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    funding_request_id = db.Column(db.Integer, db.ForeignKey('funding_request.id'), nullable=False)
+    transaction_id = db.Column(db.Integer, db.ForeignKey('financial_transaction.id'), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Relationships
+    transaction = db.relationship('Transaction')
 
 # Form Classes
 class TransactionForm(FlaskForm):
@@ -134,6 +169,17 @@ class TransactionForm(FlaskForm):
         ('expense', 'Expense')
     ])
     payee = SelectField('Payee', coerce=int)
+    funding_request = SelectField('Funding Request', coerce=int)
+
+class AddFamilyMemberForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired(), Length(min=3, max=80)])
+    email = StringField('Email', validators=[DataRequired(), Email()])
+    password = PasswordField('Password', validators=[DataRequired(), Length(min=8)])
+    role = SelectField('Role', validators=[DataRequired()], choices=[
+        ('mother', 'Mother'),
+        ('child', 'Child')
+    ])
+    initial_balance = FloatField('Initial Balance', validators=[NumberRange(min=0)])
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -160,30 +206,36 @@ def family_member_required(f):
 
 # Helper functions
 def create_family(family_name, father_username, father_email, father_password):
-    # Check if a family with this name already exists
-    if Family.query.filter_by(name=family_name).first():
-        raise ValueError("A family with this name already exists")
-    
-    # Create new family
-    family = Family(name=family_name)
-    db.session.add(family)
-    db.session.flush()  # This gets us the family.id
-    
-    # Create father user
-    father = User(
-        username=father_username,
-        email=father_email,
-        role='father',
-        family_id=family.id
-    )
-    father.set_password(father_password)
-    db.session.add(father)
-    
     try:
-        db.session.commit()
-        return family
+        # Check if a family with this name already exists
+        if Family.query.filter_by(name=family_name).first():
+            raise ValueError("A family with this name already exists")
+        
+        # Create new family
+        family = Family(name=family_name)
+        db.session.add(family)
+        db.session.flush()  # This gets us the family.id
+        
+        # Create father user
+        father = User(
+            username=father_username,
+            email=father_email,
+            role='father',
+            family_id=family.id
+        )
+        father.password = father_password
+        db.session.add(father)
+        
+        try:
+            db.session.commit()
+            return family
+        except Exception as e:
+            db.session.rollback()
+            print(f"Error during family creation: {str(e)}")  # Log the specific error
+            raise e
+            
     except Exception as e:
-        db.session.rollback()
+        print(f"Error in create_family: {str(e)}")  # Log any other errors
         raise e
 
 @app.route('/')
@@ -216,51 +268,72 @@ def login():
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-        username = request.form.get('username')
-        email = request.form.get('email')
-        password = request.form.get('password')
-        role = request.form.get('role')
-        family_name = request.form.get('family_name')
-        
-        # Validate input
-        if not all([username, email, password, role]):
-            flash('All fields are required')
-            return redirect(url_for('register'))
-        
-        if not User.validate_email(email):
-            flash('Invalid email address')
-            return redirect(url_for('register'))
-        
-        if len(password) < 8:
-            flash('Password must be at least 8 characters long')
-            return redirect(url_for('register'))
-        
-        # Check if username or email already exists
-        if User.query.filter_by(username=username).first():
-            flash('Username already exists')
-            return redirect(url_for('register'))
-        
-        if User.query.filter_by(email=email).first():
-            flash('Email already exists')
-            return redirect(url_for('register'))
-        
         try:
-            if role == 'father':
-                # Create new family with father
-                create_family(family_name, username, email, password)
-                flash('Family created successfully! Please login.')
-            else:
-                # For mother/child, they need to be added by the father
-                flash('Only fathers can create new family accounts. Please ask your family administrator to add you.')
+            username = request.form.get('username')
+            email = request.form.get('email')
+            password = request.form.get('password')
+            role = request.form.get('role')
+            family_name = request.form.get('family_name')
+            
+            # Log received data (excluding password)
+            print(f"Registration attempt - Username: {username}, Email: {email}, Role: {role}, Family: {family_name}")
+            
+            # Validate input
+            if not all([username, email, password, role]):
+                missing = []
+                if not username: missing.append('username')
+                if not email: missing.append('email')
+                if not password: missing.append('password')
+                if not role: missing.append('role')
+                flash(f'Missing required fields: {", ".join(missing)}')
+                return redirect(url_for('register'))
+            
+            if not User.validate_email(email):
+                flash('Invalid email address')
+                return redirect(url_for('register'))
+            
+            # Password complexity validation
+            try:
+                # Create a temporary user to test password validation
+                test_user = User()
+                test_user.password = password
+            except ValueError as e:
+                flash(str(e))
+                return redirect(url_for('register'))
+            
+            # Check if username or email already exists
+            if User.query.filter_by(username=username).first():
+                flash('Username already exists')
+                return redirect(url_for('register'))
+            
+            if User.query.filter_by(email=email).first():
+                flash('Email already exists')
+                return redirect(url_for('register'))
+            
+            try:
+                if role == 'father':
+                    # Create new family with father
+                    create_family(family_name, username, email, password)
+                    flash('Family created successfully! Please login.')
+                else:
+                    # For mother/child, they need to be added by the father
+                    flash('Only fathers can create new family accounts. Please ask your family administrator to add you.')
+                    return redirect(url_for('register'))
+                    
+                return redirect(url_for('login'))
+                
+            except ValueError as e:
+                print(f"ValueError during registration: {str(e)}")
+                flash(str(e))
+                return redirect(url_for('register'))
+            except Exception as e:
+                print(f"Error during registration: {str(e)}")
+                flash('An error occurred. Please try again.')
                 return redirect(url_for('register'))
                 
-            return redirect(url_for('login'))
-            
-        except ValueError as e:
-            flash(str(e))
-            return redirect(url_for('register'))
         except Exception as e:
-            flash('An error occurred. Please try again.')
+            print(f"Unexpected error during registration: {str(e)}")
+            flash('An unexpected error occurred. Please try again.')
             return redirect(url_for('register'))
             
     return render_template('register.html')
@@ -269,6 +342,15 @@ def register():
 @login_required
 def add_transaction():
     form = TransactionForm()
+    
+    # Get active funding requests for the family
+    active_requests = FundingRequest.query.filter_by(
+        family_id=current_user.family_id,
+        status='approved'
+    ).all()
+    
+    # Add funding request selection to form
+    form.funding_request.choices = [(0, 'General Balance (No Funding Request)')] + [(r.id, r.title) for r in active_requests]
     
     # Get family members for payee selection (excluding current user)
     family_members = User.query.filter(
@@ -279,7 +361,7 @@ def add_transaction():
     
     # Update payee choices
     form.payee.choices = [(m.id, m.username) for m in family_members]
-    form.payee.choices.insert(0, (0, 'Select Payee'))  # Add default option
+    form.payee.choices.insert(0, (0, 'Select Payee'))
     
     if form.validate_on_submit():
         try:
@@ -293,37 +375,66 @@ def add_transaction():
                 family_id=current_user.family_id
             )
             
+            # Add transaction to session first to get its ID
+            db.session.add(transaction)
+            db.session.flush()
+            
+            # Handle funding request if selected
+            funding_request_id = form.funding_request.data
+            if funding_request_id and funding_request_id != 0:
+                # Check funding request balance
+                balance = FundingRequestBalance.query.filter_by(
+                    funding_request_id=funding_request_id,
+                    user_id=current_user.id
+                ).first()
+                
+                if not balance:
+                    flash('No balance found for this funding request.', 'danger')
+                    return render_template('add_transaction.html', form=form)
+                
+                if balance.remaining_balance < form.amount.data:
+                    flash('Insufficient funding request balance for this transaction.', 'danger')
+                    return render_template('add_transaction.html', form=form)
+                
+                # Update funding request balance
+                balance.remaining_balance -= form.amount.data
+                
+                # Link transaction to funding request
+                fr_transaction = FundingRequestTransaction(
+                    funding_request_id=funding_request_id,
+                    transaction_id=transaction.id,
+                    amount=form.amount.data
+                )
+                db.session.add(fr_transaction)
+            
+            # Calculate total family balance
+            family_balance = sum(member.balance for member in family_members + [current_user])
+            
             # Set payee if selected
-            if form.payee.data != 0:  # 0 is our "Select Payee" option
+            if form.payee.data != 0:
                 transaction.payee_id = form.payee.data
+                payee = User.query.get(form.payee.data)
                 
                 # Update balances based on transaction type
-                payee = User.query.get(form.payee.data)
                 if transaction.transaction_type == 'expense':
-                    # Current user pays money to payee
-                    if current_user.balance < transaction.amount:
-                        flash('Insufficient balance for this transaction.', 'danger')
+                    if family_balance < transaction.amount:
+                        flash('Insufficient family balance for this transaction.', 'danger')
                         return render_template('add_transaction.html', form=form)
                     current_user.balance -= transaction.amount
                     payee.balance += transaction.amount
                 else:  # income
-                    # Current user receives money from payee
-                    if payee.balance < transaction.amount:
-                        flash('Selected payee has insufficient balance.', 'danger')
-                        return render_template('add_transaction.html', form=form)
                     current_user.balance += transaction.amount
                     payee.balance -= transaction.amount
             else:
                 # No payee selected, just update current user's balance
                 if transaction.transaction_type == 'expense':
-                    if current_user.balance < transaction.amount:
-                        flash('Insufficient balance for this transaction.', 'danger')
+                    if family_balance < transaction.amount:
+                        flash('Insufficient family balance for this transaction.', 'danger')
                         return render_template('add_transaction.html', form=form)
                     current_user.balance -= transaction.amount
                 else:  # income
                     current_user.balance += transaction.amount
             
-            db.session.add(transaction)
             db.session.commit()
             flash('Transaction added successfully!', 'success')
             return redirect(url_for('dashboard'))
@@ -331,6 +442,7 @@ def add_transaction():
         except Exception as e:
             db.session.rollback()
             flash(f'Error adding transaction: {str(e)}', 'danger')
+            return render_template('add_transaction.html', form=form)
             
     return render_template('add_transaction.html', form=form)
 
@@ -381,49 +493,32 @@ def logout():
 @login_required
 @father_required
 def add_family_member():
-    if request.method == 'POST':
-        username = request.form.get('username')
-        email = request.form.get('email')
-        password = request.form.get('password')
-        role = request.form.get('role')
-        
-        if role == 'father':
-            flash('Cannot add another father to the family')
-            return redirect(url_for('add_family_member'))
-        
-        if not all([username, email, password, role]):
-            flash('All fields are required')
-            return redirect(url_for('add_family_member'))
-            
-        if not User.validate_email(email):
-            flash('Invalid email address')
-            return redirect(url_for('add_family_member'))
-            
-        if len(password) < 8:
-            flash('Password must be at least 8 characters long')
-            return redirect(url_for('add_family_member'))
-            
+    form = AddFamilyMemberForm()
+    
+    if form.validate_on_submit():
         try:
             # Check if username or email already exists
-            if User.query.filter_by(username=username).first():
+            if User.query.filter_by(username=form.username.data).first():
                 flash('Username already exists')
                 return redirect(url_for('add_family_member'))
                 
-            if User.query.filter_by(email=email).first():
+            if User.query.filter_by(email=form.email.data).first():
                 flash('Email already exists')
                 return redirect(url_for('add_family_member'))
             
             new_user = User(
-                username=username,
-                email=email,
-                role=role,
-                family_id=current_user.family_id
+                username=form.username.data,
+                email=form.email.data,
+                role=form.role.data,
+                family_id=current_user.family_id,
+                balance=form.initial_balance.data or 0.0
             )
-            new_user.password = password
+            new_user.password = form.password.data
             db.session.add(new_user)
             db.session.commit()
-            flash(f'Successfully added new family member: {username}')
+            flash(f'Successfully added new family member: {form.username.data}')
             return redirect(url_for('dashboard'))
+            
         except IntegrityError:
             db.session.rollback()
             flash('Database error: Username or email already exists')
@@ -436,7 +531,7 @@ def add_family_member():
             flash(f'An unexpected error occurred: {str(e)}')
             return redirect(url_for('add_family_member'))
             
-    return render_template('add_family_member.html')
+    return render_template('add_family_member.html', form=form)
 
 @app.route('/manage_family_members')
 @login_required
@@ -470,7 +565,7 @@ def funding_requests():
     """View all funding requests for the family."""
     requests = FundingRequest.query.filter_by(
         family_id=current_user.family_id
-    ).order_by(FundingRequest.date_requested.desc()).all()
+    ).order_by(FundingRequest.created_at.desc()).all()
     return render_template('funding_requests.html', requests=requests)
 
 @app.route('/funding_requests/add', methods=['GET', 'POST'])
@@ -514,70 +609,80 @@ def add_funding_request():
 
     return render_template('add_funding_request.html')
 
-@app.route('/funding_requests/<int:id>/approve', methods=['POST'])
+@app.route('/approve_funding_request/<int:id>', methods=['POST'])
 @login_required
-@father_required
 def approve_funding_request(id):
-    """Approve or reject a funding request (father only)."""
+    if current_user.role not in ['father', 'mother']:
+        flash('Only parents can approve funding requests.', 'danger')
+        return redirect(url_for('funding_requests'))
+
+    funding_request = FundingRequest.query.get_or_404(id)
+    
+    if funding_request.family_id != current_user.family_id:
+        flash('You can only approve funding requests for your family.', 'danger')
+        return redirect(url_for('funding_requests'))
+    
+    action = request.form.get('action', 'reject')
+    
     try:
-        funding_request = FundingRequest.query.filter_by(
-            id=id,
-            family_id=current_user.family_id
-        ).first_or_404()
-
-        # Only pending requests can be approved/rejected
-        if funding_request.status != 'pending':
-            flash('This request has already been processed.', 'error')
-            return redirect(url_for('funding_requests'))
-
-        # Get form data
-        status = request.form.get('status')
-        comments = request.form.get('comments')
-        amount = float(request.form.get('amount', 0))
-
-        if status not in ['approved', 'rejected']:
-            flash('Invalid status provided.', 'error')
-            return redirect(url_for('funding_requests'))
-
-        if amount <= 0:
-            flash('Amount must be greater than 0.', 'error')
-            return redirect(url_for('funding_requests'))
-
-        # Update request
-        funding_request.status = status
-        funding_request.approved_by = current_user.id
-        funding_request.approved_date = datetime.utcnow()
-        funding_request.comments = comments
-        funding_request.amount = amount  # Update with potentially modified amount
-
-        # If approved, create a transaction and update requester's balance
-        if status == 'approved':
-            # Update requester's balance
+        if action == 'approve':
+            # Check if family has enough balance
             requester = User.query.get(funding_request.requested_by)
-            requester.balance += amount
+            if requester.balance < funding_request.amount:
+                flash('Insufficient family balance to approve this request.', 'danger')
+                return redirect(url_for('funding_requests'))
             
-            # Create transaction
+            # Create a funding request balance record
+            balance = FundingRequestBalance(
+                funding_request_id=funding_request.id,
+                user_id=funding_request.requested_by,
+                allocated_amount=funding_request.amount,
+                remaining_balance=funding_request.amount
+            )
+            
+            # Update request status
+            funding_request.status = 'approved'
+            funding_request.approved_by = current_user.id
+            funding_request.approved_date = datetime.utcnow()
+            
+            # Create initial transaction
             transaction = Transaction(
-                amount=amount,
+                amount=funding_request.amount,
                 category='Funding Request',
-                description=f'Approved funding request: {funding_request.title}',
+                description=f'Initial allocation for: {funding_request.title}',
                 transaction_type='expense',
                 family_id=current_user.family_id,
                 created_by=current_user.id,
                 payee_id=funding_request.requested_by
             )
+            
+            # Link transaction to funding request
+            fr_transaction = FundingRequestTransaction(
+                funding_request_id=funding_request.id,
+                transaction_id=transaction.id,
+                amount=funding_request.amount
+            )
+            
+            # Update balances
+            requester.balance += funding_request.amount
+            
+            db.session.add(balance)
             db.session.add(transaction)
-
-        db.session.commit()
-        flash(f'Funding request {status} successfully!', 'success')
-
-    except ValueError:
-        db.session.rollback()
-        flash('Invalid amount provided.', 'error')
+            db.session.add(fr_transaction)
+            db.session.commit()
+            
+            flash(f'Funding request "{funding_request.title}" has been approved.', 'success')
+        else:
+            funding_request.status = 'rejected'
+            funding_request.approved_by = current_user.id
+            funding_request.approved_date = datetime.utcnow()
+            db.session.commit()
+            flash(f'Funding request "{funding_request.title}" has been rejected.', 'info')
+            
     except Exception as e:
         db.session.rollback()
-        flash('An error occurred while processing the request. Please try again.', 'error')
-
+        flash(f'Error processing funding request: {str(e)}', 'danger')
+        
     return redirect(url_for('funding_requests'))
 
 @app.route('/funding_requests/<int:id>/edit', methods=['GET', 'POST'])
@@ -649,7 +754,7 @@ def delete_funding_request(id):
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    transactions = Transaction.query.filter_by(family_id=current_user.family_id).order_by(Transaction.date.desc()).all()
+    transactions = Transaction.query.filter_by(family_id=current_user.family_id).order_by(Transaction.created_at.desc()).all()
     
     total_income = sum(t.amount for t in transactions if t.transaction_type == 'income')
     total_expense = sum(t.amount for t in transactions if t.transaction_type == 'expense')

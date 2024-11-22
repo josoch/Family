@@ -109,7 +109,7 @@
                         <tbody>
                             {% for transaction in transactions %}
                             <tr>
-                                <td>{{ transaction.date.strftime('%Y-%m-%d %H:%M') }}</td>
+                                <td>{{ transaction.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
                                 <td>
                                     <span class="badge {% if transaction.transaction_type == 'income' %}bg-success{% else %}bg-danger{% endif %}">
                                         {{ transaction.transaction_type }}
