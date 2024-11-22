@@ -42,7 +42,7 @@
 
     <div class="container mt-4">
         <div class="row mb-4">
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <div class="card bg-success text-white">
                     <div class="card-body">
                         <h5 class="card-title">Total Income</h5>
@@ -50,7 +50,7 @@
                     </div>
                 </div>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <div class="card bg-danger text-white">
                     <div class="card-body">
                         <h5 class="card-title">Total Expenses</h5>
@@ -58,11 +58,19 @@
                     </div>
                 </div>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
                 <div class="card bg-info text-white">
                     <div class="card-body">
-                        <h5 class="card-title">Balance</h5>
+                        <h5 class="card-title">Family Balance</h5>
                         <h3 class="card-text">₦{{ "%.2f"|format(balance) }}</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-primary text-white">
+                    <div class="card-body">
+                        <h5 class="card-title">Your Balance</h5>
+                        <h3 class="card-text">₦{{ "%.2f"|format(user_balance) }}</h3>
                     </div>
                 </div>
             </div>
@@ -94,6 +102,7 @@
                                 <th>Description</th>
                                 <th>Amount</th>
                                 <th>Created By</th>
+                                <th>Payee</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -110,6 +119,7 @@
                                 <td>{{ transaction.description }}</td>
                                 <td>₦{{ "%.2f"|format(transaction.amount) }}</td>
                                 <td>{{ transaction.creator.username }}</td>
+                                <td>{{ transaction.payee.username if transaction.payee else '-' }}</td>
                                 <td>
                                     <a href="{{ url_for('edit_transaction', id=transaction.id) }}" class="btn btn-sm btn-warning">
                                         <i class="bi bi-pencil"></i>

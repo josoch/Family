@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key'  # Change this to a secure secret key
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///family_finance.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///c:/Users/user/CascadeProjects/Family/instance/family.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = 1800  # 30 minutes session timeout
 
@@ -27,6 +27,17 @@ class Family(db.Model):
     transactions = db.relationship('Transaction', backref='family', lazy=True)
     funding_requests = db.relationship('FundingRequest', backref=db.backref('family', lazy=True))
 
+class Transaction(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    amount = db.Column(db.Float, nullable=False)
+    category = db.Column(db.String(50), nullable=False)
+    description = db.Column(db.String(200))
+    date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    transaction_type = db.Column(db.String(20), nullable=False)  # 'income' or 'expense'
+    family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    payee_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -37,7 +48,9 @@ class User(UserMixin, db.Model):
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime)
-    transactions_created = db.relationship('Transaction', backref='creator', lazy=True)
+    balance = db.Column(db.Float, default=0.0)
+    transactions_created = db.relationship('Transaction', backref='creator', foreign_keys=[Transaction.created_by], lazy=True)
+    transactions_received = db.relationship('Transaction', backref='payee', foreign_keys=[Transaction.payee_id], lazy=True)
     requests_created = db.relationship('FundingRequest', foreign_keys='FundingRequest.requested_by', backref='requester', lazy=True)
     requests_approved = db.relationship('FundingRequest', foreign_keys='FundingRequest.approved_by', backref='approver', lazy=True)
 
@@ -68,16 +81,6 @@ class User(UserMixin, db.Model):
         # Basic email validation
         pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         return re.match(pattern, email) is not None
-
-class Transaction(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    amount = db.Column(db.Float, nullable=False)
-    category = db.Column(db.String(50), nullable=False)
-    description = db.Column(db.String(200))
-    date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    transaction_type = db.Column(db.String(20), nullable=False)  # 'income' or 'expense'
-    family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
-    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
 
 class FundingRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -222,41 +225,57 @@ def register():
             
     return render_template('register.html')
 
-@app.route('/dashboard')
-@login_required
-def dashboard():
-    transactions = Transaction.query.filter_by(family_id=current_user.family_id).order_by(Transaction.date.desc()).all()
-    total_income = sum(t.amount for t in transactions if t.transaction_type == 'income')
-    total_expense = sum(t.amount for t in transactions if t.transaction_type == 'expense')
-    balance = total_income - total_expense
-    return render_template('dashboard.html', 
-                         transactions=transactions, 
-                         total_income=total_income,
-                         total_expense=total_expense,
-                         balance=balance)
-
 @app.route('/add_transaction', methods=['GET', 'POST'])
 @login_required
 def add_transaction():
     if request.method == 'POST':
-        amount = float(request.form.get('amount'))
-        category = request.form.get('category')
-        description = request.form.get('description')
-        transaction_type = request.form.get('transaction_type')
-        
-        transaction = Transaction(
-            amount=amount,
-            category=category,
-            description=description,
-            transaction_type=transaction_type,
-            family_id=current_user.family_id,
-            created_by=current_user.id
-        )
-        db.session.add(transaction)
-        db.session.commit()
-        flash('Transaction added successfully')
-        return redirect(url_for('dashboard'))
-    return render_template('add_transaction.html')
+        try:
+            amount = float(request.form.get('amount'))
+            category = request.form.get('category')
+            description = request.form.get('description')
+            transaction_type = request.form.get('transaction_type')
+            payee_id = request.form.get('payee_id')
+            
+            if payee_id:
+                payee_id = int(payee_id)
+                payee = User.query.get(payee_id)
+                if not payee or payee.family_id != current_user.family_id:
+                    flash('Invalid payee selected.', 'error')
+                    return redirect(url_for('add_transaction'))
+                
+                # Update payee's balance
+                if transaction_type == 'expense':
+                    payee.balance += amount
+                else:
+                    payee.balance -= amount
+
+            # Create transaction
+            transaction = Transaction(
+                amount=amount,
+                category=category,
+                description=description,
+                transaction_type=transaction_type,
+                family_id=current_user.family_id,
+                created_by=current_user.id,
+                payee_id=payee_id if payee_id else None
+            )
+            
+            db.session.add(transaction)
+            db.session.commit()
+            
+            flash('Transaction added successfully!', 'success')
+            return redirect(url_for('dashboard'))
+            
+        except ValueError:
+            flash('Please enter valid values.', 'error')
+            return redirect(url_for('add_transaction'))
+        except Exception as e:
+            db.session.rollback()
+            flash('An error occurred. Please try again.', 'error')
+            return redirect(url_for('add_transaction'))
+    
+    family_members = User.query.filter_by(family_id=current_user.family_id).all()
+    return render_template('add_transaction.html', family_members=family_members)
 
 @app.route('/edit_transaction/<int:id>', methods=['GET', 'POST'])
 @login_required
@@ -467,15 +486,21 @@ def approve_funding_request(id):
         funding_request.approved_date = datetime.utcnow()
         funding_request.comments = comments
 
-        # If approved, create a transaction
+        # If approved, create a transaction and update requester's balance
         if status == 'approved':
+            # Update requester's balance
+            requester = User.query.get(funding_request.requested_by)
+            requester.balance += funding_request.amount
+            
+            # Create transaction
             transaction = Transaction(
                 amount=funding_request.amount,
                 category='Funding Request',
                 description=f'Approved funding request: {funding_request.title}',
                 transaction_type='expense',
                 family_id=current_user.family_id,
-                created_by=current_user.id
+                created_by=current_user.id,
+                payee_id=funding_request.requested_by
             )
             db.session.add(transaction)
 
@@ -487,6 +512,25 @@ def approve_funding_request(id):
         flash('An error occurred while processing the request. Please try again.', 'error')
 
     return redirect(url_for('funding_requests'))
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    transactions = Transaction.query.filter_by(family_id=current_user.family_id).order_by(Transaction.date.desc()).all()
+    
+    total_income = sum(t.amount for t in transactions if t.transaction_type == 'income')
+    total_expense = sum(t.amount for t in transactions if t.transaction_type == 'expense')
+    balance = total_income - total_expense
+    
+    # Get user's personal balance
+    user_balance = current_user.balance
+    
+    return render_template('dashboard.html', 
+                         transactions=transactions,
+                         total_income=total_income,
+                         total_expense=total_expense,
+                         balance=balance,
+                         user_balance=user_balance)
 
 if __name__ == '__main__':
     with app.app_context():

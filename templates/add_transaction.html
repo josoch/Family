@@ -44,6 +44,17 @@
                                 </select>
                             </div>
                             <div class="mb-3">
+                                <label for="payee" class="form-label">Payee (Optional)</label>
+                                <select class="form-select" id="payee" name="payee_id">
+                                    <option value="">Select Payee</option>
+                                    {% for member in family_members %}
+                                        {% if member.id != current_user.id %}
+                                            <option value="{{ member.id }}">{{ member.username }}</option>
+                                        {% endif %}
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="mb-3">
                                 <label for="amount" class="form-label">Amount (₦)</label>
                                 <input type="number" step="0.01" class="form-control" id="amount" name="amount" required>
                             </div>
