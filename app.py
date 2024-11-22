@@ -352,16 +352,29 @@ def add_transaction():
     # Add funding request selection to form
     form.funding_request.choices = [(0, 'General Balance (No Funding Request)')] + [(r.id, r.title) for r in active_requests]
     
-    # Get family members for payee selection (excluding current user)
-    family_members = User.query.filter(
-        User.family_id == current_user.family_id,
-        User.id != current_user.id,
-        User.is_active == True
-    ).all()
+    # Get family members for payee selection
+    if current_user.role == 'child':
+        # For children, only show parents as payee options
+        family_members = User.query.filter(
+            User.family_id == current_user.family_id,
+            User.role.in_(['father', 'mother']),
+            User.is_active == True
+        ).all()
+        # Auto-select the first parent
+        if family_members:
+            form.payee.data = family_members[0].id
+    else:
+        # For parents, show all family members except themselves
+        family_members = User.query.filter(
+            User.family_id == current_user.family_id,
+            User.id != current_user.id,
+            User.is_active == True
+        ).all()
     
     # Update payee choices
     form.payee.choices = [(m.id, m.username) for m in family_members]
-    form.payee.choices.insert(0, (0, 'Select Payee'))
+    if current_user.role != 'child':
+        form.payee.choices.insert(0, (0, 'Select Payee'))
     
     if form.validate_on_submit():
         try:
@@ -374,6 +387,12 @@ def add_transaction():
                 created_by=current_user.id,
                 family_id=current_user.family_id
             )
+            
+            # For children, always set payee to the selected parent
+            if current_user.role == 'child':
+                transaction.payee_id = form.payee.data
+            else:
+                transaction.payee_id = form.payee.data if form.payee.data != 0 else None
             
             # Add transaction to session first to get its ID
             db.session.add(transaction)
@@ -410,12 +429,9 @@ def add_transaction():
             # Calculate total family balance
             family_balance = sum(member.balance for member in family_members + [current_user])
             
-            # Set payee if selected
-            if form.payee.data != 0:
-                transaction.payee_id = form.payee.data
-                payee = User.query.get(form.payee.data)
-                
-                # Update balances based on transaction type
+            # Handle balance updates
+            if transaction.payee_id:
+                payee = User.query.get(transaction.payee_id)
                 if transaction.transaction_type == 'expense':
                     if family_balance < transaction.amount:
                         flash('Insufficient family balance for this transaction.', 'danger')

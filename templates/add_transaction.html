@@ -64,7 +64,18 @@
                             {% endif %}
                         </div>
 
-                        {% if current_user.role in ['father', 'mother'] %}
+                        {% if current_user.role == 'child' %}
+                        <div class="form-group mb-3">
+                            {{ form.payee.label(class="form-label") }}
+                            {{ form.payee(class="form-select", disabled=True) }}
+                            <small class="text-muted">As a child, your transactions will be with your parents.</small>
+                            {% if form.payee.errors %}
+                                {% for error in form.payee.errors %}
+                                    <div class="alert alert-danger">{{ error }}</div>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                        {% else %}
                         <div class="form-group mb-3">
                             {{ form.payee.label(class="form-label") }}
                             {{ form.payee(class="form-select") }}
