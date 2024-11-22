@@ -72,13 +72,36 @@
                                 </td>
                                 <td>{{ member.last_login.strftime('%Y-%m-%d %H:%M') if member.last_login else 'Never' }}</td>
                                 <td>
-                                    {% if member.role != 'father' %}
-                                    <a href="{{ url_for('toggle_member_status', user_id=member.id) }}" 
-                                       class="btn btn-sm {% if member.is_active %}btn-warning{% else %}btn-success{% endif %}"
-                                       onclick="return confirm('Are you sure you want to {% if member.is_active %}deactivate{% else %}activate{% endif %} this account?')">
-                                        <i class="bi {% if member.is_active %}bi-person-x{% else %}bi-person-check{% endif %}"></i>
-                                        {% if member.is_active %}Deactivate{% else %}Activate{% endif %}
-                                    </a>
+                                    {% if current_user.role == 'father' and member.id != current_user.id %}
+                                        <a href="{{ url_for('edit_family_member', user_id=member.id) }}" class="btn btn-warning btn-sm">
+                                            <i class="bi bi-pencil"></i> Edit
+                                        </a>
+                                        <a href="{{ url_for('toggle_member_status', user_id=member.id) }}" class="btn btn-{% if member.is_active %}danger{% else %}success{% endif %} btn-sm">
+                                            <i class="bi bi-{% if member.is_active %}person-x{% else %}person-check{% endif %}"></i>
+                                            {{ 'Deactivate' if member.is_active else 'Activate' }}
+                                        </a>
+                                        <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteModal{{ member.id }}">
+                                            <i class="bi bi-trash"></i> Delete
+                                        </button>
+
+                                        <!-- Delete Confirmation Modal -->
+                                        <div class="modal fade" id="deleteModal{{ member.id }}" tabindex="-1" aria-labelledby="deleteModalLabel{{ member.id }}" aria-hidden="true">
+                                            <div class="modal-dialog">
+                                                <div class="modal-content">
+                                                    <div class="modal-header">
+                                                        <h5 class="modal-title" id="deleteModalLabel{{ member.id }}">Confirm Delete</h5>
+                                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                    </div>
+                                                    <div class="modal-body">
+                                                        Are you sure you want to delete {{ member.username }}? This action cannot be undone.
+                                                    </div>
+                                                    <div class="modal-footer">
+                                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                        <a href="{{ url_for('delete_family_member', user_id=member.id) }}" class="btn btn-danger">Delete</a>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
                                     {% endif %}
                                 </td>
                             </tr>

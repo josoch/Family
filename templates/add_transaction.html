@@ -29,7 +29,7 @@
 
     <div class="container mt-4">
         <div class="row justify-content-center">
-            <div class="col-md-8">
+            <div class="col-md-6">
                 <div class="card">
                     <div class="card-header">
                         <h4>Add New Transaction</h4>
@@ -37,16 +37,17 @@
                     <div class="card-body">
                         <form method="POST">
                             <div class="mb-3">
-                                <label for="transaction_type" class="form-label">Transaction Type</label>
-                                <select class="form-select" id="transaction_type" name="transaction_type" required>
+                                <label for="type" class="form-label">Type</label>
+                                <select class="form-select" id="type" name="transaction_type" required>
                                     <option value="income">Income</option>
                                     <option value="expense">Expense</option>
                                 </select>
                             </div>
+                            
                             <div class="mb-3">
-                                <label for="payee" class="form-label">Payee (Optional)</label>
+                                <label for="payee" class="form-label">Payee</label>
                                 <select class="form-select" id="payee" name="payee_id">
-                                    <option value="">Select Payee</option>
+                                    <option value="">Select Username</option>
                                     {% for member in family_members %}
                                         {% if member.id != current_user.id %}
                                             <option value="{{ member.id }}">{{ member.username }}</option>
@@ -54,35 +55,31 @@
                                     {% endfor %}
                                 </select>
                             </div>
+
                             <div class="mb-3">
                                 <label for="amount" class="form-label">Amount (₦)</label>
                                 <input type="number" step="0.01" class="form-control" id="amount" name="amount" required>
                             </div>
+
                             <div class="mb-3">
                                 <label for="category" class="form-label">Category</label>
                                 <select class="form-select" id="category" name="category" required>
-                                    <option value="">Select category</option>
-                                    <optgroup label="Income Categories">
-                                        <option value="Salary">Salary</option>
-                                        <option value="Allowance">Allowance</option>
-                                        <option value="Bonus">Bonus</option>
-                                        <option value="Other Income">Other Income</option>
-                                    </optgroup>
-                                    <optgroup label="Expense Categories">
-                                        <option value="Food">Food</option>
-                                        <option value="Transportation">Transportation</option>
-                                        <option value="Entertainment">Entertainment</option>
-                                        <option value="Education">Education</option>
-                                        <option value="Shopping">Shopping</option>
-                                        <option value="Bills">Bills</option>
-                                        <option value="Other Expense">Other Expense</option>
-                                    </optgroup>
+                                    <option value="Food">Food</option>
+                                    <option value="Transportation">Transportation</option>
+                                    <option value="Utilities">Utilities</option>
+                                    <option value="Entertainment">Entertainment</option>
+                                    <option value="Education">Education</option>
+                                    <option value="Healthcare">Healthcare</option>
+                                    <option value="Shopping">Shopping</option>
+                                    <option value="Other">Other</option>
                                 </select>
                             </div>
+
                             <div class="mb-3">
                                 <label for="description" class="form-label">Description</label>
                                 <textarea class="form-control" id="description" name="description" rows="3"></textarea>
                             </div>
+
                             <div class="d-grid gap-2">
                                 <button type="submit" class="btn btn-primary">Add Transaction</button>
                                 <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Cancel</a>

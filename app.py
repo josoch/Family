@@ -274,6 +274,7 @@ def add_transaction():
             flash('An error occurred. Please try again.', 'error')
             return redirect(url_for('add_transaction'))
     
+    # Get all family members for the payee dropdown
     family_members = User.query.filter_by(family_id=current_user.family_id).all()
     return render_template('add_transaction.html', family_members=family_members)
 
@@ -475,9 +476,14 @@ def approve_funding_request(id):
         # Get form data
         status = request.form.get('status')
         comments = request.form.get('comments')
+        amount = float(request.form.get('amount', 0))
 
         if status not in ['approved', 'rejected']:
             flash('Invalid status provided.', 'error')
+            return redirect(url_for('funding_requests'))
+
+        if amount <= 0:
+            flash('Amount must be greater than 0.', 'error')
             return redirect(url_for('funding_requests'))
 
         # Update request
@@ -485,16 +491,17 @@ def approve_funding_request(id):
         funding_request.approved_by = current_user.id
         funding_request.approved_date = datetime.utcnow()
         funding_request.comments = comments
+        funding_request.amount = amount  # Update with potentially modified amount
 
         # If approved, create a transaction and update requester's balance
         if status == 'approved':
             # Update requester's balance
             requester = User.query.get(funding_request.requested_by)
-            requester.balance += funding_request.amount
+            requester.balance += amount
             
             # Create transaction
             transaction = Transaction(
-                amount=funding_request.amount,
+                amount=amount,
                 category='Funding Request',
                 description=f'Approved funding request: {funding_request.title}',
                 transaction_type='expense',
@@ -507,6 +514,9 @@ def approve_funding_request(id):
         db.session.commit()
         flash(f'Funding request {status} successfully!', 'success')
 
+    except ValueError:
+        db.session.rollback()
+        flash('Invalid amount provided.', 'error')
     except Exception as e:
         db.session.rollback()
         flash('An error occurred while processing the request. Please try again.', 'error')
@@ -531,6 +541,109 @@ def dashboard():
                          total_expense=total_expense,
                          balance=balance,
                          user_balance=user_balance)
+
+@app.route('/edit_family_member/<int:user_id>', methods=['GET', 'POST'])
+@login_required
+@father_required
+def edit_family_member(user_id):
+    """Edit a family member (father only)."""
+    member = User.query.filter_by(id=user_id, family_id=current_user.family_id).first_or_404()
+    
+    # Prevent editing the father's account
+    if member.role == 'father':
+        flash('Cannot edit father account.', 'error')
+        return redirect(url_for('manage_family_members'))
+    
+    if request.method == 'POST':
+        try:
+            username = request.form.get('username')
+            email = request.form.get('email')
+            role = request.form.get('role')
+            new_password = request.form.get('new_password')
+            
+            # Validate email format
+            if not User.is_email_valid(email):
+                flash('Invalid email format.', 'error')
+                return render_template('edit_family_member.html', member=member)
+            
+            # Check if username or email is taken by another user
+            username_exists = User.query.filter(
+                User.username == username,
+                User.id != user_id
+            ).first()
+            email_exists = User.query.filter(
+                User.email == email,
+                User.id != user_id
+            ).first()
+            
+            if username_exists:
+                flash('Username already taken.', 'error')
+                return render_template('edit_family_member.html', member=member)
+            if email_exists:
+                flash('Email already registered.', 'error')
+                return render_template('edit_family_member.html', member=member)
+            
+            # Update user details
+            member.username = username
+            member.email = email
+            member.role = role
+            
+            # Update password if provided
+            if new_password:
+                if not User.is_password_valid(new_password):
+                    flash('Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number.', 'error')
+                    return render_template('edit_family_member.html', member=member)
+                member.set_password(new_password)
+            
+            db.session.commit()
+            flash('Family member updated successfully!', 'success')
+            return redirect(url_for('manage_family_members'))
+            
+        except Exception as e:
+            db.session.rollback()
+            flash('An error occurred while updating the family member.', 'error')
+            return render_template('edit_family_member.html', member=member)
+    
+    return render_template('edit_family_member.html', member=member)
+
+@app.route('/delete_family_member/<int:user_id>')
+@login_required
+@father_required
+def delete_family_member(user_id):
+    """Delete a family member (father only)."""
+    if current_user.id == user_id:
+        flash('Cannot delete your own account.', 'error')
+        return redirect(url_for('manage_family_members'))
+    
+    member = User.query.filter_by(id=user_id, family_id=current_user.family_id).first_or_404()
+    
+    if member.role == 'father':
+        flash('Cannot delete father account.', 'error')
+        return redirect(url_for('manage_family_members'))
+    
+    try:
+        # Delete associated transactions
+        Transaction.query.filter(
+            (Transaction.created_by == user_id) | 
+            (Transaction.payee_id == user_id)
+        ).delete()
+        
+        # Delete associated funding requests
+        FundingRequest.query.filter(
+            (FundingRequest.requested_by == user_id) |
+            (FundingRequest.approved_by == user_id)
+        ).delete()
+        
+        # Delete the user
+        db.session.delete(member)
+        db.session.commit()
+        flash('Family member deleted successfully!', 'success')
+        
+    except Exception as e:
+        db.session.rollback()
+        flash('An error occurred while deleting the family member.', 'error')
+    
+    return redirect(url_for('manage_family_members'))
 
 if __name__ == '__main__':
     with app.app_context():
