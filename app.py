@@ -6,6 +6,9 @@ from datetime import datetime
 from functools import wraps
 import re
 from sqlalchemy.exc import IntegrityError
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, SelectField, FloatField, TextAreaField
+from wtforms.validators import DataRequired, Email, Length, NumberRange, ValidationError
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key'  # Change this to a secure secret key
@@ -21,63 +24,71 @@ login_manager.login_view = 'login'
 # Database Models
 class Family(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    family_name = db.Column(db.String(100), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    users = db.relationship('User', backref='family', lazy=True)
-    transactions = db.relationship('Transaction', backref='family', lazy=True)
-    funding_requests = db.relationship('FundingRequest', backref=db.backref('family', lazy=True))
+    
+    # Relationships
+    members = db.relationship('User', backref='family', lazy=True)
+    transactions = db.relationship('Transaction', backref='family_ref', lazy=True)
+    funding_requests = db.relationship('FundingRequest', backref='family_ref', lazy=True)
 
 class Transaction(db.Model):
+    __tablename__ = 'financial_transaction'
     id = db.Column(db.Integer, primary_key=True)
     amount = db.Column(db.Float, nullable=False)
     category = db.Column(db.String(50), nullable=False)
-    description = db.Column(db.String(200))
-    date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    transaction_type = db.Column(db.String(20), nullable=False)  # 'income' or 'expense'
+    description = db.Column(db.Text)
+    transaction_type = db.Column(db.String(20), nullable=False)
+    date = db.Column(db.DateTime, default=datetime.utcnow)
     family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
     created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    payee_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    payee_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+
+    # Relationships without backrefs (since they're defined in User model)
+    creator = db.relationship('User', foreign_keys=[created_by])
+    payee = db.relationship('User', foreign_keys=[payee_id])
 
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(120), nullable=False)
-    role = db.Column(db.String(20), nullable=False)  # 'father', 'mother', 'child'
+    password_hash = db.Column(db.String(128))
+    role = db.Column(db.String(20), nullable=False)  # father, mother, child
     family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
-    is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_login = db.Column(db.DateTime)
     balance = db.Column(db.Float, default=0.0)
-    transactions_created = db.relationship('Transaction', backref='creator', foreign_keys=[Transaction.created_by], lazy=True)
-    transactions_received = db.relationship('Transaction', backref='payee', foreign_keys=[Transaction.payee_id], lazy=True)
-    requests_created = db.relationship('FundingRequest', foreign_keys='FundingRequest.requested_by', backref='requester', lazy=True)
-    requests_approved = db.relationship('FundingRequest', foreign_keys='FundingRequest.approved_by', backref='approver', lazy=True)
+    is_active = db.Column(db.Boolean, default=True)
 
-    def set_password(self, password):
-        if not self.is_password_valid(password):
-            raise ValueError("Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number")
+    # Define relationships with backrefs here
+    transactions_created = db.relationship('Transaction', 
+                                         foreign_keys='Transaction.created_by',
+                                         backref=db.backref('creator_ref', lazy=True),
+                                         lazy=True)
+    transactions_received = db.relationship('Transaction', 
+                                          foreign_keys='Transaction.payee_id',
+                                          backref=db.backref('payee_ref', lazy=True),
+                                          lazy=True)
+    requests_created = db.relationship('FundingRequest', 
+                                     foreign_keys='FundingRequest.requested_by',
+                                     backref=db.backref('requester_ref', lazy=True),
+                                     lazy=True)
+    requests_approved = db.relationship('FundingRequest',
+                                      foreign_keys='FundingRequest.approved_by',
+                                      backref=db.backref('approver_ref', lazy=True),
+                                      lazy=True)
+
+    @property
+    def password(self):
+        raise AttributeError('password is not a readable attribute')
+
+    @password.setter
+    def password(self, password):
         self.password_hash = generate_password_hash(password)
 
-    def check_password(self, password):
+    def verify_password(self, password):
         return check_password_hash(self.password_hash, password)
-    
+
     @staticmethod
-    def is_password_valid(password):
-        # Password must be at least 8 characters long and contain at least one uppercase letter,
-        # one lowercase letter, and one number
-        if len(password) < 8:
-            return False
-        if not re.search(r"[A-Z]", password):
-            return False
-        if not re.search(r"[a-z]", password):
-            return False
-        if not re.search(r"\d", password):
-            return False
-        return True
-    
-    @staticmethod
-    def is_email_valid(email):
+    def validate_email(email):
         # Basic email validation
         pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         return re.match(pattern, email) is not None
@@ -85,15 +96,44 @@ class User(UserMixin, db.Model):
 class FundingRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.Text, nullable=False)
+    description = db.Column(db.Text)
     amount = db.Column(db.Float, nullable=False)
-    date_requested = db.Column(db.DateTime, default=datetime.utcnow)
-    status = db.Column(db.String(20), default='pending')  # pending, approved, rejected
-    family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
+    status = db.Column(db.String(20), default='pending')
     requested_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    approved_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-    approved_date = db.Column(db.DateTime, nullable=True)
-    comments = db.Column(db.Text, nullable=True)
+    approved_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+    family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=False)
+    comments = db.Column(db.Text)
+    date_requested = db.Column(db.DateTime, server_default=db.text('CURRENT_TIMESTAMP'))
+    approved_date = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime, server_default=db.text('CURRENT_TIMESTAMP'), 
+                          onupdate=db.text('CURRENT_TIMESTAMP'))
+
+    # Relationships without backrefs (since they're defined in User model)
+    requester = db.relationship('User', foreign_keys=[requested_by])
+    approver = db.relationship('User', foreign_keys=[approved_by])
+
+# Form Classes
+class TransactionForm(FlaskForm):
+    amount = FloatField('Amount', validators=[
+        DataRequired(),
+        NumberRange(min=0.01, message="Amount must be greater than 0")
+    ])
+    category = SelectField('Category', validators=[DataRequired()], choices=[
+        ('Food', 'Food'),
+        ('Transportation', 'Transportation'),
+        ('Utilities', 'Utilities'),
+        ('Entertainment', 'Entertainment'),
+        ('Education', 'Education'),
+        ('Healthcare', 'Healthcare'),
+        ('Shopping', 'Shopping'),
+        ('Other', 'Other')
+    ])
+    description = TextAreaField('Description')
+    transaction_type = SelectField('Type', validators=[DataRequired()], choices=[
+        ('income', 'Income'),
+        ('expense', 'Expense')
+    ])
+    payee = SelectField('Payee', coerce=int)
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -121,11 +161,11 @@ def family_member_required(f):
 # Helper functions
 def create_family(family_name, father_username, father_email, father_password):
     # Check if a family with this name already exists
-    if Family.query.filter_by(family_name=family_name).first():
+    if Family.query.filter_by(name=family_name).first():
         raise ValueError("A family with this name already exists")
     
     # Create new family
-    family = Family(family_name=family_name)
+    family = Family(name=family_name)
     db.session.add(family)
     db.session.flush()  # This gets us the family.id
     
@@ -160,7 +200,7 @@ def login():
         
         user = User.query.filter_by(username=username).first()
         
-        if user and user.check_password(password):
+        if user and user.verify_password(password):
             if not user.is_active:
                 flash('Your account has been deactivated. Please contact your family administrator.')
                 return redirect(url_for('login'))
@@ -187,12 +227,12 @@ def register():
             flash('All fields are required')
             return redirect(url_for('register'))
         
-        if not User.is_email_valid(email):
+        if not User.validate_email(email):
             flash('Invalid email address')
             return redirect(url_for('register'))
         
-        if not User.is_password_valid(password):
-            flash('Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number')
+        if len(password) < 8:
+            flash('Password must be at least 8 characters long')
             return redirect(url_for('register'))
         
         # Check if username or email already exists
@@ -228,55 +268,71 @@ def register():
 @app.route('/add_transaction', methods=['GET', 'POST'])
 @login_required
 def add_transaction():
-    if request.method == 'POST':
+    form = TransactionForm()
+    
+    # Get family members for payee selection (excluding current user)
+    family_members = User.query.filter(
+        User.family_id == current_user.family_id,
+        User.id != current_user.id,
+        User.is_active == True
+    ).all()
+    
+    # Update payee choices
+    form.payee.choices = [(m.id, m.username) for m in family_members]
+    form.payee.choices.insert(0, (0, 'Select Payee'))  # Add default option
+    
+    if form.validate_on_submit():
         try:
-            amount = float(request.form.get('amount'))
-            category = request.form.get('category')
-            description = request.form.get('description')
-            transaction_type = request.form.get('transaction_type')
-            payee_id = request.form.get('payee_id')
-            
-            if payee_id:
-                payee_id = int(payee_id)
-                payee = User.query.get(payee_id)
-                if not payee or payee.family_id != current_user.family_id:
-                    flash('Invalid payee selected.', 'error')
-                    return redirect(url_for('add_transaction'))
-                
-                # Update payee's balance
-                if transaction_type == 'expense':
-                    payee.balance += amount
-                else:
-                    payee.balance -= amount
-
-            # Create transaction
+            # Create new transaction
             transaction = Transaction(
-                amount=amount,
-                category=category,
-                description=description,
-                transaction_type=transaction_type,
-                family_id=current_user.family_id,
+                amount=form.amount.data,
+                category=form.category.data,
+                description=form.description.data,
+                transaction_type=form.transaction_type.data,
                 created_by=current_user.id,
-                payee_id=payee_id if payee_id else None
+                family_id=current_user.family_id
             )
+            
+            # Set payee if selected
+            if form.payee.data != 0:  # 0 is our "Select Payee" option
+                transaction.payee_id = form.payee.data
+                
+                # Update balances based on transaction type
+                payee = User.query.get(form.payee.data)
+                if transaction.transaction_type == 'expense':
+                    # Current user pays money to payee
+                    if current_user.balance < transaction.amount:
+                        flash('Insufficient balance for this transaction.', 'danger')
+                        return render_template('add_transaction.html', form=form)
+                    current_user.balance -= transaction.amount
+                    payee.balance += transaction.amount
+                else:  # income
+                    # Current user receives money from payee
+                    if payee.balance < transaction.amount:
+                        flash('Selected payee has insufficient balance.', 'danger')
+                        return render_template('add_transaction.html', form=form)
+                    current_user.balance += transaction.amount
+                    payee.balance -= transaction.amount
+            else:
+                # No payee selected, just update current user's balance
+                if transaction.transaction_type == 'expense':
+                    if current_user.balance < transaction.amount:
+                        flash('Insufficient balance for this transaction.', 'danger')
+                        return render_template('add_transaction.html', form=form)
+                    current_user.balance -= transaction.amount
+                else:  # income
+                    current_user.balance += transaction.amount
             
             db.session.add(transaction)
             db.session.commit()
-            
             flash('Transaction added successfully!', 'success')
             return redirect(url_for('dashboard'))
             
-        except ValueError:
-            flash('Please enter valid values.', 'error')
-            return redirect(url_for('add_transaction'))
         except Exception as e:
             db.session.rollback()
-            flash('An error occurred. Please try again.', 'error')
-            return redirect(url_for('add_transaction'))
-    
-    # Get all family members for the payee dropdown
-    family_members = User.query.filter_by(family_id=current_user.family_id).all()
-    return render_template('add_transaction.html', family_members=family_members)
+            flash(f'Error adding transaction: {str(e)}', 'danger')
+            
+    return render_template('add_transaction.html', form=form)
 
 @app.route('/edit_transaction/<int:id>', methods=['GET', 'POST'])
 @login_required
@@ -339,12 +395,12 @@ def add_family_member():
             flash('All fields are required')
             return redirect(url_for('add_family_member'))
             
-        if not User.is_email_valid(email):
+        if not User.validate_email(email):
             flash('Invalid email address')
             return redirect(url_for('add_family_member'))
             
-        if not User.is_password_valid(password):
-            flash('Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number')
+        if len(password) < 8:
+            flash('Password must be at least 8 characters long')
             return redirect(url_for('add_family_member'))
             
         try:
@@ -363,7 +419,7 @@ def add_family_member():
                 role=role,
                 family_id=current_user.family_id
             )
-            new_user.set_password(password)
+            new_user.password = password
             db.session.add(new_user)
             db.session.commit()
             flash(f'Successfully added new family member: {username}')
@@ -412,8 +468,9 @@ def toggle_member_status(user_id):
 @login_required
 def funding_requests():
     """View all funding requests for the family."""
-    requests = FundingRequest.query.filter_by(family_id=current_user.family_id)\
-        .order_by(FundingRequest.date_requested.desc()).all()
+    requests = FundingRequest.query.filter_by(
+        family_id=current_user.family_id
+    ).order_by(FundingRequest.date_requested.desc()).all()
     return render_template('funding_requests.html', requests=requests)
 
 @app.route('/funding_requests/add', methods=['GET', 'POST'])
@@ -523,6 +580,72 @@ def approve_funding_request(id):
 
     return redirect(url_for('funding_requests'))
 
+@app.route('/funding_requests/<int:id>/edit', methods=['GET', 'POST'])
+@login_required
+@father_required
+def edit_funding_request(id):
+    """Edit a pending funding request (father only)."""
+    funding_request = FundingRequest.query.filter_by(
+        id=id,
+        family_id=current_user.family_id
+    ).first_or_404()
+
+    if funding_request.status != 'pending':
+        flash('Only pending requests can be edited.', 'error')
+        return redirect(url_for('funding_requests'))
+
+    if request.method == 'POST':
+        try:
+            amount = float(request.form.get('amount'))
+            title = request.form.get('title')
+            description = request.form.get('description')
+
+            if amount <= 0:
+                flash('Amount must be greater than 0.', 'error')
+                return redirect(url_for('edit_funding_request', id=id))
+
+            funding_request.amount = amount
+            funding_request.title = title
+            funding_request.description = description
+            funding_request.updated_at = datetime.utcnow()
+
+            db.session.commit()
+            flash('Funding request updated successfully!', 'success')
+            return redirect(url_for('funding_requests'))
+
+        except ValueError:
+            flash('Please enter valid values.', 'error')
+        except Exception as e:
+            db.session.rollback()
+            flash('An error occurred. Please try again.', 'error')
+
+    return render_template('edit_funding_request.html', request=funding_request)
+
+@app.route('/funding_requests/<int:id>/delete', methods=['POST'])
+@login_required
+@father_required
+def delete_funding_request(id):
+    """Delete a pending funding request (father only)."""
+    try:
+        funding_request = FundingRequest.query.filter_by(
+            id=id,
+            family_id=current_user.family_id
+        ).first_or_404()
+
+        if funding_request.status != 'pending':
+            flash('Only pending requests can be deleted.', 'error')
+            return redirect(url_for('funding_requests'))
+
+        db.session.delete(funding_request)
+        db.session.commit()
+        flash('Funding request deleted successfully!', 'success')
+
+    except Exception as e:
+        db.session.rollback()
+        flash('An error occurred while deleting the request.', 'error')
+
+    return redirect(url_for('funding_requests'))
+
 @app.route('/dashboard')
 @login_required
 def dashboard():
@@ -562,7 +685,7 @@ def edit_family_member(user_id):
             new_password = request.form.get('new_password')
             
             # Validate email format
-            if not User.is_email_valid(email):
+            if not User.validate_email(email):
                 flash('Invalid email format.', 'error')
                 return render_template('edit_family_member.html', member=member)
             
@@ -590,10 +713,10 @@ def edit_family_member(user_id):
             
             # Update password if provided
             if new_password:
-                if not User.is_password_valid(new_password):
-                    flash('Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number.', 'error')
+                if len(new_password) < 8:
+                    flash('Password must be at least 8 characters long', 'error')
                     return render_template('edit_family_member.html', member=member)
-                member.set_password(new_password)
+                member.password = new_password
             
             db.session.commit()
             flash('Family member updated successfully!', 'success')
