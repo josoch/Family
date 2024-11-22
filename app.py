@@ -204,6 +204,15 @@ def family_member_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def requires_father_role(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or current_user.role != 'father':
+            flash('Only the father can perform this action.', 'danger')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 # Helper functions
 def create_family(family_name, father_username, father_email, father_password):
     try:
@@ -482,39 +491,172 @@ def add_transaction():
 
 @app.route('/edit_transaction/<int:id>', methods=['GET', 'POST'])
 @login_required
+@requires_father_role
 def edit_transaction(id):
     transaction = Transaction.query.get_or_404(id)
+    form = TransactionForm()
     
-    # Ensure users can only edit transactions from their family
-    if transaction.family_id != current_user.family_id:
-        flash('You do not have permission to edit this transaction')
-        return redirect(url_for('dashboard'))
-    
-    if request.method == 'POST':
-        transaction.amount = float(request.form.get('amount'))
-        transaction.category = request.form.get('category')
-        transaction.description = request.form.get('description')
-        transaction.transaction_type = request.form.get('transaction_type')
+    if request.method == 'GET':
+        form.amount.data = transaction.amount
+        form.category.data = transaction.category
+        form.description.data = transaction.description
+        form.transaction_type.data = transaction.transaction_type
         
-        db.session.commit()
-        flash('Transaction updated successfully')
-        return redirect(url_for('dashboard'))
+        # Get active funding requests
+        active_requests = FundingRequest.query.filter_by(
+            family_id=current_user.family_id,
+            status='approved'
+        ).all()
+        
+        # Set funding request choices
+        fr_transaction = FundingRequestTransaction.query.filter_by(transaction_id=transaction.id).first()
+        form.funding_request.choices = [(0, 'General Balance (No Funding Request)')] + [
+            (r.id, r.title) for r in active_requests
+        ]
+        if fr_transaction:
+            form.funding_request.data = fr_transaction.funding_request_id
+        
+        # Set payee choices
+        family_members = User.query.filter(
+            User.family_id == current_user.family_id,
+            User.id != current_user.id,
+            User.is_active == True
+        ).all()
+        form.payee.choices = [(0, 'Select Payee')] + [(m.id, m.username) for m in family_members]
+        form.payee.data = transaction.payee_id if transaction.payee_id else 0
     
-    return render_template('edit_transaction.html', transaction=transaction)
+    if form.validate_on_submit():
+        try:
+            # Store old values for balance adjustment
+            old_amount = transaction.amount
+            old_type = transaction.transaction_type
+            old_payee_id = transaction.payee_id
+            
+            # Update transaction details
+            transaction.amount = form.amount.data
+            transaction.category = form.category.data
+            transaction.description = form.description.data
+            transaction.transaction_type = form.transaction_type.data
+            transaction.payee_id = form.payee.data if form.payee.data != 0 else None
+            
+            # Handle funding request changes
+            old_fr_transaction = FundingRequestTransaction.query.filter_by(transaction_id=transaction.id).first()
+            new_funding_request_id = form.funding_request.data
+            
+            # Remove old funding request link if exists
+            if old_fr_transaction:
+                if old_fr_transaction.funding_request_id != new_funding_request_id:
+                    # Restore old funding request balance
+                    balance = FundingRequestBalance.query.filter_by(
+                        funding_request_id=old_fr_transaction.funding_request_id,
+                        user_id=transaction.created_by
+                    ).first()
+                    if balance and transaction.transaction_type == 'expense':
+                        balance.remaining_balance += old_amount
+                    db.session.delete(old_fr_transaction)
+            
+            # Add new funding request link if selected
+            if new_funding_request_id and new_funding_request_id != 0:
+                if not old_fr_transaction or old_fr_transaction.funding_request_id != new_funding_request_id:
+                    fr_transaction = FundingRequestTransaction(
+                        funding_request_id=new_funding_request_id,
+                        transaction_id=transaction.id,
+                        amount=form.amount.data
+                    )
+                    db.session.add(fr_transaction)
+                    
+                    # Update new funding request balance
+                    balance = FundingRequestBalance.query.filter_by(
+                        funding_request_id=new_funding_request_id,
+                        user_id=transaction.created_by
+                    ).first()
+                    if balance and transaction.transaction_type == 'expense':
+                        balance.remaining_balance -= form.amount.data
+            
+            # Update user balances
+            creator = User.query.get(transaction.created_by)
+            
+            # Reverse old transaction
+            if old_payee_id:
+                old_payee = User.query.get(old_payee_id)
+                if old_type == 'expense':
+                    old_payee.balance -= old_amount
+                    creator.balance += old_amount
+                else:  # income
+                    old_payee.balance += old_amount
+                    creator.balance -= old_amount
+            else:
+                if old_type == 'expense':
+                    creator.balance += old_amount
+                else:  # income
+                    creator.balance -= old_amount
+            
+            # Apply new transaction
+            if transaction.payee_id:
+                new_payee = User.query.get(transaction.payee_id)
+                if transaction.transaction_type == 'expense':
+                    new_payee.balance += transaction.amount
+                    creator.balance -= transaction.amount
+                else:  # income
+                    new_payee.balance -= transaction.amount
+                    creator.balance += transaction.amount
+            else:
+                if transaction.transaction_type == 'expense':
+                    creator.balance -= transaction.amount
+                else:  # income
+                    creator.balance += transaction.amount
+            
+            db.session.commit()
+            flash('Transaction updated successfully!', 'success')
+            return redirect(url_for('dashboard'))
+            
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error updating transaction: {str(e)}', 'danger')
+    
+    return render_template('edit_transaction.html', form=form, transaction=transaction)
 
-@app.route('/delete_transaction/<int:id>')
+@app.route('/delete_transaction/<int:id>', methods=['POST'])
 @login_required
+@requires_father_role
 def delete_transaction(id):
     transaction = Transaction.query.get_or_404(id)
     
-    # Ensure users can only delete transactions from their family
-    if transaction.family_id != current_user.family_id:
-        flash('You do not have permission to delete this transaction')
-        return redirect(url_for('dashboard'))
+    try:
+        # If transaction is linked to a funding request, update the balance
+        fr_transaction = FundingRequestTransaction.query.filter_by(transaction_id=transaction.id).first()
+        if fr_transaction:
+            balance = FundingRequestBalance.query.filter_by(
+                funding_request_id=fr_transaction.funding_request_id,
+                user_id=transaction.created_by
+            ).first()
+            if balance and transaction.transaction_type == 'expense':
+                balance.remaining_balance += transaction.amount
+            
+            db.session.delete(fr_transaction)
+        
+        # Reverse the balance changes
+        if transaction.payee_id:
+            payee = User.query.get(transaction.payee_id)
+            if transaction.transaction_type == 'expense':
+                payee.balance -= transaction.amount
+                transaction.created_by.balance += transaction.amount
+            else:  # income
+                payee.balance += transaction.amount
+                transaction.created_by.balance -= transaction.amount
+        else:
+            if transaction.transaction_type == 'expense':
+                transaction.created_by.balance += transaction.amount
+            else:  # income
+                transaction.created_by.balance -= transaction.amount
+        
+        db.session.delete(transaction)
+        db.session.commit()
+        flash('Transaction deleted successfully.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error deleting transaction: {str(e)}', 'danger')
     
-    db.session.delete(transaction)
-    db.session.commit()
-    flash('Transaction deleted successfully')
     return redirect(url_for('dashboard'))
 
 @app.route('/logout')
