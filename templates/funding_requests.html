@@ -161,7 +161,7 @@
     function showReviewModal(id, title, amount) {
         const modal = document.getElementById('reviewModal');
         const form = document.getElementById('reviewForm');
-        form.action = `/funding_requests/${id}/approve`;
+        form.action = `/approve_funding_request/${id}`;
         document.getElementById('modalAmount').value = amount;
         new bootstrap.Modal(modal).show();
     }

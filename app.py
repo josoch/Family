@@ -349,8 +349,15 @@ def add_transaction():
         status='approved'
     ).all()
     
+    # For children, only show their own approved funding requests
+    if current_user.role == 'child':
+        active_requests = [r for r in active_requests if r.requested_by == current_user.id]
+        
     # Add funding request selection to form
-    form.funding_request.choices = [(0, 'General Balance (No Funding Request)')] + [(r.id, r.title) for r in active_requests]
+    form.funding_request.choices = [(0, 'General Balance (No Funding Request)')] + [
+        (r.id, f"{r.title} (Balance: ₦{FundingRequestBalance.query.filter_by(funding_request_id=r.id, user_id=current_user.id).first().remaining_balance:.2f})")
+        for r in active_requests
+    ]
     
     # Get family members for payee selection
     if current_user.role == 'child':
@@ -378,6 +385,33 @@ def add_transaction():
     
     if form.validate_on_submit():
         try:
+            # For children, require a funding request for expenses
+            if current_user.role == 'child' and form.transaction_type.data == 'expense':
+                if not form.funding_request.data or form.funding_request.data == 0:
+                    flash('Children must select a funding request for expenses.', 'danger')
+                    return render_template('add_transaction.html', form=form)
+                
+                # Check funding request balance
+                funding_request = FundingRequest.query.get(form.funding_request.data)
+                balance = FundingRequestBalance.query.filter_by(
+                    funding_request_id=form.funding_request.data,
+                    user_id=current_user.id
+                ).first()
+                
+                if not balance or balance.remaining_balance < form.amount.data:
+                    flash('Insufficient funding request balance for this transaction.', 'danger')
+                    return render_template('add_transaction.html', form=form)
+            
+            # For parents using general balance
+            elif current_user.role in ['father', 'mother'] and (not form.funding_request.data or form.funding_request.data == 0):
+                # Calculate total family balance
+                family_members = User.query.filter_by(family_id=current_user.family_id, is_active=True).all()
+                family_balance = sum(member.balance for member in family_members)
+                
+                if form.transaction_type.data == 'expense' and family_balance < form.amount.data:
+                    flash('Insufficient family balance for this transaction.', 'danger')
+                    return render_template('add_transaction.html', form=form)
+            
             # Create new transaction
             transaction = Transaction(
                 amount=form.amount.data,
@@ -388,7 +422,7 @@ def add_transaction():
                 family_id=current_user.family_id
             )
             
-            # For children, always set payee to the selected parent
+            # Set payee
             if current_user.role == 'child':
                 transaction.payee_id = form.payee.data
             else:
@@ -401,55 +435,39 @@ def add_transaction():
             # Handle funding request if selected
             funding_request_id = form.funding_request.data
             if funding_request_id and funding_request_id != 0:
-                # Check funding request balance
+                # Update funding request balance
                 balance = FundingRequestBalance.query.filter_by(
                     funding_request_id=funding_request_id,
                     user_id=current_user.id
                 ).first()
                 
-                if not balance:
-                    flash('No balance found for this funding request.', 'danger')
-                    return render_template('add_transaction.html', form=form)
-                
-                if balance.remaining_balance < form.amount.data:
-                    flash('Insufficient funding request balance for this transaction.', 'danger')
-                    return render_template('add_transaction.html', form=form)
-                
-                # Update funding request balance
-                balance.remaining_balance -= form.amount.data
-                
-                # Link transaction to funding request
-                fr_transaction = FundingRequestTransaction(
-                    funding_request_id=funding_request_id,
-                    transaction_id=transaction.id,
-                    amount=form.amount.data
-                )
-                db.session.add(fr_transaction)
+                if balance:
+                    if form.transaction_type.data == 'expense':
+                        balance.remaining_balance -= form.amount.data
+                    
+                    # Link transaction to funding request
+                    fr_transaction = FundingRequestTransaction(
+                        funding_request_id=funding_request_id,
+                        transaction_id=transaction.id,
+                        amount=form.amount.data
+                    )
+                    db.session.add(fr_transaction)
             
-            # Calculate total family balance
-            family_balance = sum(member.balance for member in family_members + [current_user])
-            
-            # Handle balance updates
+            # Update balances based on transaction type and user roles
             if transaction.payee_id:
                 payee = User.query.get(transaction.payee_id)
                 if transaction.transaction_type == 'expense':
-                    if family_balance < transaction.amount:
-                        flash('Insufficient family balance for this transaction.', 'danger')
-                        return render_template('add_transaction.html', form=form)
-                    current_user.balance -= transaction.amount
-                    payee.balance += transaction.amount
+                    current_user.balance -= form.amount.data
+                    payee.balance += form.amount.data
                 else:  # income
-                    current_user.balance += transaction.amount
-                    payee.balance -= transaction.amount
+                    current_user.balance += form.amount.data
+                    payee.balance -= form.amount.data
             else:
                 # No payee selected, just update current user's balance
                 if transaction.transaction_type == 'expense':
-                    if family_balance < transaction.amount:
-                        flash('Insufficient family balance for this transaction.', 'danger')
-                        return render_template('add_transaction.html', form=form)
-                    current_user.balance -= transaction.amount
+                    current_user.balance -= form.amount.data
                 else:  # income
-                    current_user.balance += transaction.amount
+                    current_user.balance += form.amount.data
             
             db.session.commit()
             flash('Transaction added successfully!', 'success')
@@ -638,13 +656,19 @@ def approve_funding_request(id):
         flash('You can only approve funding requests for your family.', 'danger')
         return redirect(url_for('funding_requests'))
     
-    action = request.form.get('action', 'reject')
+    status = request.form.get('status', 'rejected')
     
     try:
-        if action == 'approve':
+        if status == 'approved':
+            # Get all family members and calculate total family balance
+            family_members = User.query.filter_by(
+                family_id=current_user.family_id,
+                is_active=True
+            ).all()
+            family_balance = sum(member.balance for member in family_members)
+            
             # Check if family has enough balance
-            requester = User.query.get(funding_request.requested_by)
-            if requester.balance < funding_request.amount:
+            if family_balance < funding_request.amount:
                 flash('Insufficient family balance to approve this request.', 'danger')
                 return redirect(url_for('funding_requests'))
             
@@ -672,6 +696,9 @@ def approve_funding_request(id):
                 payee_id=funding_request.requested_by
             )
             
+            db.session.add(transaction)
+            db.session.flush()  # Get the transaction ID
+            
             # Link transaction to funding request
             fr_transaction = FundingRequestTransaction(
                 funding_request_id=funding_request.id,
@@ -679,11 +706,12 @@ def approve_funding_request(id):
                 amount=funding_request.amount
             )
             
-            # Update balances
-            requester.balance += funding_request.amount
+            # Update balances - deduct from approver and add to requester
+            current_user.balance -= funding_request.amount  # Deduct from approver (parent)
+            requester = User.query.get(funding_request.requested_by)
+            requester.balance += funding_request.amount  # Add to requester
             
             db.session.add(balance)
-            db.session.add(transaction)
             db.session.add(fr_transaction)
             db.session.commit()
             
@@ -772,12 +800,23 @@ def delete_funding_request(id):
 def dashboard():
     transactions = Transaction.query.filter_by(family_id=current_user.family_id).order_by(Transaction.created_at.desc()).all()
     
+    # Calculate total income and expense for the family
     total_income = sum(t.amount for t in transactions if t.transaction_type == 'income')
     total_expense = sum(t.amount for t in transactions if t.transaction_type == 'expense')
     balance = total_income - total_expense
     
-    # Get user's personal balance
-    user_balance = current_user.balance
+    # Get all funding request transactions for the current user
+    funding_request_transactions = db.session.query(Transaction).join(
+        FundingRequestTransaction, 
+        Transaction.id == FundingRequestTransaction.transaction_id
+    ).filter(
+        Transaction.family_id == current_user.family_id,
+        Transaction.created_by == current_user.id,
+        Transaction.transaction_type == 'expense'
+    ).all()
+    
+    # Calculate user's balance from funding request expenses only
+    user_balance = sum(t.amount for t in funding_request_transactions)
     
     return render_template('dashboard.html', 
                          transactions=transactions,

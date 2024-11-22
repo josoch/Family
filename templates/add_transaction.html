@@ -3,98 +3,78 @@
 {% block title %}Add Transaction{% endblock %}
 
 {% block content %}
-<div class="container">
-    <div class="row justify-content-center">
-        <div class="col-md-8">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">Add Transaction</h3>
-                </div>
-                <div class="card-body">
-                    <form method="POST">
-                        {{ form.hidden_tag() }}
-                        
-                        <div class="form-group mb-3">
-                            {{ form.amount.label(class="form-label") }}
-                            {{ form.amount(class="form-control") }}
-                            {% if form.amount.errors %}
-                                {% for error in form.amount.errors %}
-                                    <div class="alert alert-danger">{{ error }}</div>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
+    <div class="container mt-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
 
-                        <div class="form-group mb-3">
-                            {{ form.category.label(class="form-label") }}
-                            {{ form.category(class="form-select") }}
-                            {% if form.category.errors %}
-                                {% for error in form.category.errors %}
-                                    <div class="alert alert-danger">{{ error }}</div>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
+        <div class="row mb-4">
+            <div class="col">
+                <h2>Add Transaction</h2>
+            </div>
+        </div>
 
-                        <div class="form-group mb-3">
-                            {{ form.description.label(class="form-label") }}
-                            {{ form.description(class="form-control") }}
-                            {% if form.description.errors %}
-                                {% for error in form.description.errors %}
-                                    <div class="alert alert-danger">{{ error }}</div>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
+        <div class="card">
+            <div class="card-body">
+                <form method="POST">
+                    {{ form.csrf_token }}
+                    
+                    <div class="mb-3">
+                        {{ form.transaction_type.label(class="form-label") }}
+                        {{ form.transaction_type(class="form-select") }}
+                    </div>
 
-                        <div class="form-group mb-3">
-                            {{ form.transaction_type.label(class="form-label") }}
-                            {{ form.transaction_type(class="form-select") }}
-                            {% if form.transaction_type.errors %}
-                                {% for error in form.transaction_type.errors %}
-                                    <div class="alert alert-danger">{{ error }}</div>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
+                    <div class="mb-3">
+                        {{ form.amount.label(class="form-label") }}
+                        {{ form.amount(class="form-control", type="number", step="0.01") }}
+                    </div>
 
-                        <div class="form-group mb-3">
+                    <div class="mb-3">
+                        {{ form.category.label(class="form-label") }}
+                        {{ form.category(class="form-select") }}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.description.label(class="form-label") }}
+                        {{ form.description(class="form-control") }}
+                    </div>
+
+                    {% if current_user.role == 'child' %}
+                        <div class="mb-3">
                             {{ form.funding_request.label(class="form-label") }}
                             {{ form.funding_request(class="form-select") }}
-                            {% if form.funding_request.errors %}
-                                {% for error in form.funding_request.errors %}
-                                    <div class="invalid-feedback d-block">{{ error }}</div>
-                                {% endfor %}
-                            {% endif %}
+                            <div class="form-text text-danger">Children must select a funding request for expenses.</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            {{ form.payee.label(class="form-label") }}
+                            {{ form.payee(class="form-select", disabled=true) }}
+                            <div class="form-text">As a child, your transactions will be with your parents.</div>
+                        </div>
+                    {% else %}
+                        <div class="mb-3">
+                            {{ form.funding_request.label(class="form-label") }}
+                            {{ form.funding_request(class="form-select") }}
+                            <div class="form-text">Optional for parents. Select a funding request or use the general family balance.</div>
                         </div>
 
-                        {% if current_user.role == 'child' %}
-                        <div class="form-group mb-3">
-                            {{ form.payee.label(class="form-label") }}
-                            {{ form.payee(class="form-select", disabled=True) }}
-                            <small class="text-muted">As a child, your transactions will be with your parents.</small>
-                            {% if form.payee.errors %}
-                                {% for error in form.payee.errors %}
-                                    <div class="alert alert-danger">{{ error }}</div>
-                                {% endfor %}
-                            {% endif %}
-                        </div>
-                        {% else %}
-                        <div class="form-group mb-3">
+                        <div class="mb-3">
                             {{ form.payee.label(class="form-label") }}
                             {{ form.payee(class="form-select") }}
-                            {% if form.payee.errors %}
-                                {% for error in form.payee.errors %}
-                                    <div class="alert alert-danger">{{ error }}</div>
-                                {% endfor %}
-                            {% endif %}
                         </div>
-                        {% endif %}
+                    {% endif %}
 
-                        <div class="d-grid gap-2">
-                            <button type="submit" class="btn btn-primary">Add Transaction</button>
-                            <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Cancel</a>
-                        </div>
-                    </form>
-                </div>
+                    <button type="submit" class="btn btn-primary">Add Transaction</button>
+                    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Cancel</a>
+                </form>
             </div>
         </div>
     </div>
-</div>
 {% endblock %}
